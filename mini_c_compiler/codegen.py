@@ -329,3 +329,170 @@ class PythonCodeGenerator:
             return instr
             
         return "" # Skip unknown or empty
+
+class AssemblyCodeGenerator:
+    def __init__(self, instructions):
+        self.instructions = instructions
+
+    def generate(self):
+        output = []
+        output.append("; -- Mini C Assembly --")
+        
+        output.append("JMP __init_globals")
+        
+        functions = {}
+        current_func = 'global'
+        functions[current_func] = []
+        
+        for instr in self.instructions:
+            if instr.startswith("FUNC "):
+                current_func = instr.split()[1]
+                functions[current_func] = []
+            elif instr == "END_FUNC":
+                current_func = 'global'
+            else:
+                functions[current_func].append(instr)
+
+        # Code for functions
+        for func_name, instrs in functions.items():
+            if func_name == 'global': continue
+            
+            output.append(f"{func_name}:")
+            output.append(self.generate_block(instrs))
+            # Ensure RET if missing (e.g. void)
+            output.append("RET")
+            output.append("")
+
+        # Code for globals and entry
+        output.append("__init_globals:")
+        if 'global' in functions:
+            output.append(self.generate_block(functions['global']))
+            
+        output.append("CALL main")
+        output.append("HALT")
+        
+        return "\n".join(output)
+
+    def generate_block(self, instructions):
+        lines = []
+        args_buffer = []
+
+        for instr in instructions:
+            if not instr or instr.startswith(';'): 
+                continue
+                
+            # Handle Labels
+            if instr.endswith(':'):
+                lines.append(instr)
+                continue
+            
+            # Handle Comments
+            lines.append(f"; {instr}")
+
+            # 1. Function Call args buffering
+            if instr.startswith("ARG "):
+                val = instr.split()[1]
+                args_buffer.append(val)
+                continue
+            
+            if " = CALL " in instr:
+                # t1 = CALL func
+                lhs, rhs = instr.split(" = CALL ")
+                func_name = rhs
+                
+                # Push args in REVERSE order
+                for arg in reversed(args_buffer):
+                    lines.append(f"PUSH {arg}")
+                args_buffer = [] # Clear buffer
+                
+                lines.append(f"CALL {func_name}")
+                lines.append(f"STORE {lhs}")
+                continue
+                
+            if "CALL " in instr: # Standalone call (ignore result)
+                # Should match if no assignment? My parser might not produce this for expressions.
+                # But assume `CALL func` exists.
+                if args_buffer: # If any args pending
+                     for arg in reversed(args_buffer):
+                        lines.append(f"PUSH {arg}")
+                     args_buffer = []
+                # Check for "CALL func"
+                parts = instr.split()
+                if parts[0] == "CALL":
+                    lines.append(f"CALL {parts[1]}")
+                    continue
+
+            # 2. Assignment & Arithmetic
+            # Format: t1 = op1 OP op2
+            if " = " in instr:
+                parts = instr.split(" = ")
+                lhs = parts[0]
+                rhs = parts[1]
+                
+                # Binary Ops
+                ops = {
+                    '+': 'ADD', '-': 'SUB', '*': 'MUL', '/': 'DIV',
+                    '==': 'EQ', '!=': 'NEQ', '>': 'GT', '<': 'LT', '>=': 'GTE', '<=': 'LTE'
+                }
+                
+                match = None
+                parsed_op = False
+                
+                # Check for "a OP b"
+                # Need careful spacing check as vars can be 'a', 'b'
+                # Assumption: IR puts spaces around ops: "a + b"
+                for sym, asm_op in ops.items():
+                    fsym = f" {sym} "
+                    if fsym in rhs:
+                        op1, op2 = rhs.split(fsym, 1)
+                        lines.append(f"PUSH {op1}")
+                        lines.append(f"PUSH {op2}")
+                        lines.append(asm_op)
+                        lines.append(f"STORE {lhs}")
+                        parsed_op = True
+                        break
+                
+                if parsed_op: continue
+                
+                # Unary / Simple Assignment
+                # "t1 = 5" or "t1 = x"
+                lines.append(f"PUSH {rhs}")
+                lines.append(f"STORE {lhs}")
+                continue
+
+            # 3. Control Flow
+            if instr.startswith("IF_FALSE"):
+                # IF_FALSE t1 GOTO L1
+                _, cond, _, label = instr.split()
+                lines.append(f"PUSH {cond}")
+                lines.append(f"JZ {label}")
+                continue
+                
+            if instr.startswith("GOTO"):
+                label = instr.split()[1]
+                lines.append(f"JMP {label}")
+                continue
+                
+            if instr.startswith("RETURN"):
+                parts = instr.split()
+                if len(parts) > 1:
+                    val = parts[1]
+                    lines.append(f"PUSH {val}")
+                else:
+                    lines.append("PUSH 0") # Void return default?
+                lines.append("RET")
+                continue
+
+            # 4. Other
+            if instr.startswith("PRINT"):
+                val = instr.split()[1]
+                lines.append(f"PUSH {val}")
+                lines.append("PRINT")
+                continue
+                
+            if instr.startswith("PARAM"):
+                val = instr.split()[1]
+                lines.append(f"PARAM {val}")
+                continue
+
+        return "\n".join(lines)

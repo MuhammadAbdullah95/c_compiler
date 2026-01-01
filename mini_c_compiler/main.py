@@ -1,13 +1,15 @@
 import sys
+import os
 from mini_c_compiler.lexer import Lexer
 from mini_c_compiler.parser import Parser
 from mini_c_compiler.semantic import SemanticAnalyzer
 from mini_c_compiler.ir import IRGenerator
 from mini_c_compiler.optimizer import Optimizer
-from mini_c_compiler.codegen import PythonCodeGenerator
+from mini_c_compiler.codegen import PythonCodeGenerator, AssemblyCodeGenerator
+from mini_c_compiler.visualizer import ASTVisualizer
 from mini_c_compiler.core.errors import CompilerError
 
-def compile_file(filename, output_file=None, verbose=True):
+def compile_file(filename, output_file=None, verbose=True, target='python', visualize=False):
     try:
         # Read source code
         with open(filename, 'r') as f:
@@ -42,6 +44,15 @@ def compile_file(filename, output_file=None, verbose=True):
             print("=" * 60)
             print(ast)
             print()
+            
+        if visualize:
+            viz = ASTVisualizer()
+            dot_content = viz.visualize(ast)
+            dot_file = os.path.splitext(filename)[0] + ".dot"
+            with open(dot_file, 'w') as f:
+                f.write(dot_content)
+            print(f"AST Visualization saved to: {dot_file}")
+            print("Use 'dot -Tpng {0} -o {0}.png' to render image.".format(dot_file))
         
         # Semantic Analysis
         semantic_analyzer = SemanticAnalyzer()
@@ -78,12 +89,18 @@ def compile_file(filename, output_file=None, verbose=True):
             print()
         
         # Code Generation
-        codegen = PythonCodeGenerator(optimized_ir)
-        generated_code = codegen.generate()
+        if target == 'asm':
+            codegen = AssemblyCodeGenerator(optimized_ir)
+            generated_code = codegen.generate()
+            target_name = "ASSEMBLY CODE"
+        else:
+            codegen = PythonCodeGenerator(optimized_ir)
+            generated_code = codegen.generate()
+            target_name = "GENERATED PYTHON CODE"
         
         if verbose:
             print("=" * 60)
-            print("GENERATED PYTHON CODE:")
+            print(f"{target_name}:")
             print("=" * 60)
             print(generated_code)
             print()
@@ -108,13 +125,29 @@ def compile_file(filename, output_file=None, verbose=True):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python main.py <input_file.c> [output_file.py]")
+        print("Usage: python main.py <input_file.c> [output_file] [--asm] [--viz]")
         sys.exit(1)
     
     input_file = sys.argv[1]
-    output_file = sys.argv[2] if len(sys.argv) > 2 else None
+    output_file = None
+    target = 'python'
+    visualize = False
     
-    compile_file(input_file, output_file)
+    # Parse args
+    args = sys.argv[2:]
+    for arg in args:
+        if arg == '--asm':
+            target = 'asm'
+        elif arg == '--viz':
+            visualize = True
+        elif not arg.startswith('--'):
+            output_file = arg
+            
+    if not output_file:
+        ext = '.asm' if target == 'asm' else '.py'
+        output_file = os.path.splitext(input_file)[0] + ext
+    
+    compile_file(input_file, output_file, target=target, visualize=visualize)
 
 if __name__ == '__main__':
     main()
